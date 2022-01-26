@@ -1,0 +1,902 @@
+  METHOD park_document.
+*Local variable declarations
+    DATA: lt_item_p    TYPE /kgo/fi_tt_mf_brfl,
+          lv_name      TYPE thead-tdname,
+          ls_lines     TYPE tline,
+          lv_off       TYPE i,
+          lv_to        TYPE i VALUE 132,
+          lt_lines     TYPE STANDARD TABLE OF tline,
+          lv_long_name TYPE thead-tdname,
+          lv_process   TYPE /kgo/fi_process_grp,
+          ls_duplicate TYPE /kgo/fi_st_brfl_dup, "+Added for duplicate check on BRF on 29.04.2021
+          lv_message   TYPE string.
+    DATA: lv_tax      TYPE bset-fwste,
+          lv_tax1     TYPE bset-fwste,
+          lv_tax2     TYPE bset-fwste,
+          lv_taxcode  TYPE bseg-mwskz,
+          lv_wrbtr    TYPE bseg-wrbtr,
+          lv_tax3     TYPE bset-fwste,
+          lv_tax4     TYPE bset-fwste,
+          lv_taxcode1 TYPE bseg-mwskz,
+          lv_wrbtr1   TYPE bseg-wrbtr.
+    DATA : lt_tax  TYPE STANDARD TABLE OF rtax1u15,
+           lt_tax1 TYPE STANDARD TABLE OF rtax1u15.
+
+    CONSTANTS:lc_ar  TYPE char2 VALUE 'AR',
+              lc_obj TYPE thead-tdobject VALUE 'DOC_ITEM',
+              lc_id  TYPE thead-tdid VALUE '0001'.
+    TRY."+Added for incident INC01232619 on 02.09.2020
+        IF im_head-company_code IS NOT INITIAL AND im_head-brf_no IS NOT INITIAL.
+          SELECT SINGLE * FROM /kgo/fi_mf_brfh INTO @DATA(ls_head)
+            WHERE company_code = @im_head-company_code
+            AND   brf_no = @im_head-brf_no.
+          IF sy-subrc = 0.
+            IF im_head-gjahr IS NOT INITIAL.
+              ls_head-gjahr = im_head-gjahr.
+            ENDIF.
+
+            SELECT *  FROM /kgo/fi_mf_brfl
+              INTO TABLE @DATA(lt_item)
+              WHERE company_code = @im_head-company_code
+              AND   brf_no = @im_head-brf_no
+              AND   requesting_mf = @im_mf
+              AND   global_cc = @im_cc
+              AND   process_grp = @im_pgrp
+              AND   member_firm = @im_memberfirm
+              AND   cc_short_desc = @im_cc_short_desc
+              AND   transaction_type = @im_tran_type
+              AND   delete_ind = @abap_false
+              ORDER BY company_code, brf_no.
+            IF sy-subrc = 0.
+              LOOP AT lt_item ASSIGNING FIELD-SYMBOL(<ls_item>).
+                IF <ls_item>-sap_code_mf IS NOT INITIAL.
+                  CALL FUNCTION 'CONVERSION_EXIT_ALPHA_INPUT'
+                    EXPORTING
+                      input  = <ls_item>-sap_code_mf
+                    IMPORTING
+                      output = <ls_item>-sap_code_mf.
+                ENDIF.
+                IF <ls_item>-cc_code1 IS NOT INITIAL.
+                  CALL FUNCTION 'CONVERSION_EXIT_ALPHA_INPUT'
+                    EXPORTING
+                      input  = <ls_item>-cc_code1
+                    IMPORTING
+                      output = <ls_item>-cc_code1.
+                ENDIF.
+                IF <ls_item>-cc_code2 IS NOT INITIAL.
+                  CALL FUNCTION 'CONVERSION_EXIT_ALPHA_INPUT'
+                    EXPORTING
+                      input  = <ls_item>-cc_code2
+                    IMPORTING
+                      output = <ls_item>-cc_code2.
+                ENDIF.
+                IF <ls_item>-debit_gl IS NOT INITIAL.
+                  CALL FUNCTION 'CONVERSION_EXIT_ALPHA_INPUT'
+                    EXPORTING
+                      input  = <ls_item>-debit_gl
+                    IMPORTING
+                      output = <ls_item>-debit_gl.
+                ENDIF.
+                IF <ls_item>-credit_gl IS NOT INITIAL.
+                  CALL FUNCTION 'CONVERSION_EXIT_ALPHA_INPUT'
+                    EXPORTING
+                      input  = <ls_item>-credit_gl
+                    IMPORTING
+                      output = <ls_item>-credit_gl.
+                ENDIF.
+
+                IF <ls_item>-profit_center IS NOT INITIAL.
+                  CALL FUNCTION 'CONVERSION_EXIT_ALPHA_INPUT'
+                    EXPORTING
+                      input  = <ls_item>-profit_center
+                    IMPORTING
+                      output = <ls_item>-profit_center.
+                ENDIF.
+
+                IF <ls_item>-profit_center_debit IS NOT INITIAL.
+                  CALL FUNCTION 'CONVERSION_EXIT_ALPHA_INPUT'
+                    EXPORTING
+                      input  = <ls_item>-profit_center_debit
+                    IMPORTING
+                      output = <ls_item>-profit_center_debit.
+                ENDIF.
+              ENDLOOP.
+              "+Begin of addition for Duplicate Check on 29.04.2021
+              IF im_duplicate = abap_false.
+                READ TABLE lt_item INTO DATA(ls_item3) INDEX 1.
+                IF sy-subrc = 0.
+                  IF ls_head-company_code = '9901'.
+                    ls_duplicate-blart = 'RI'.
+                  ELSE.
+                    ls_duplicate-blart = ls_item3-document_type.
+                  ENDIF.
+                  ls_duplicate-company_code = ls_head-company_code.
+                  ls_duplicate-brf_no = ls_head-brf_no.
+                  ls_duplicate-waers = ls_item3-curr1.
+                  ls_duplicate-requesting_mf = ls_item3-requesting_mf.
+                  ls_duplicate-process_grp = ls_item3-process_grp.
+                  ls_duplicate-member_firm = ls_item3-member_firm.
+                  ls_duplicate-transaction_type = ls_item3-transaction_type.
+                  ls_duplicate-kunnr = ls_item3-sap_code_mf.
+                  IF ls_item3-vat_sap_code IS NOT INITIAL.
+                    lv_wrbtr1 = ls_item3-recharge_amount_credit.
+                    "IF Document has with holding tax
+                    IF ls_item3-line_item_total IS NOT INITIAL AND ls_item3-wht_code IS NOT INITIAL.
+                      IF ls_item3-wht_code <> 'NA'.
+                        lv_wrbtr1 = ls_item3-recharge_amount_credit + ls_item3-line_item_total.
+                      ENDIF.
+                    ENDIF.
+                    lv_taxcode1 = ls_item3-vat_sap_code.
+                    CALL FUNCTION 'CALCULATE_TAX_FROM_NET_AMOUNT'
+                      EXPORTING
+                        i_bukrs           = im_head-company_code
+                        i_mwskz           = lv_taxcode1
+                        i_waers           = ls_item3-curr1
+                        i_wrbtr           = lv_wrbtr1
+                      IMPORTING
+                        e_fwste           = lv_tax3
+                        e_fwast           = lv_tax4
+                      TABLES
+                        t_mwdat           = lt_tax1
+                      EXCEPTIONS
+                        bukrs_not_found   = 1
+                        country_not_found = 2
+                        mwskz_not_defined = 3
+                        mwskz_not_valid   = 4
+                        ktosl_not_found   = 5
+                        kalsm_not_found   = 6
+                        parameter_error   = 7
+                        knumh_not_found   = 8
+                        kschl_not_found   = 9
+                        unknown_error     = 10
+                        account_not_found = 11
+                        txjcd_not_valid   = 12
+                        OTHERS            = 13.
+                    IF sy-subrc = 0.
+                      IF lv_tax4 IS NOT INITIAL.
+                        ls_item3-recharge_amount_debit = ls_item3-recharge_amount_debit + lv_tax4 + ls_item3-line_item_total.
+                      ELSE.
+                        ls_item3-recharge_amount_debit = ls_item3-recharge_amount_debit + lv_tax3 + ls_item3-line_item_total.
+                      ENDIF.
+                    ENDIF.
+                  ENDIF.
+                  ls_duplicate-wrbtr = ls_item3-recharge_amount_debit.
+                  CALL METHOD /kgo/cl_fi_doc_posting=>duplicate_check
+                    EXPORTING
+                      im_data      = ls_duplicate
+                    IMPORTING
+                      ex_duplicate = ex_duplicate
+                      ex_flag      = DATA(lv_flg)
+                      ex_message   = DATA(lv_smsg).
+                ENDIF.
+              ENDIF.
+              IF ex_duplicate IS INITIAL.
+                "+End of addition for Duplicate Check on 29.04.2021
+                MOVE-CORRESPONDING lt_item TO lt_item_p.
+                "Get data for validation
+                validate_data_for_parking(
+                  EXPORTING
+                    im_head = ls_head
+                    im_item = lt_item_p
+                  IMPORTING
+                    ex_ret  = DATA(ls_ret)
+                    ex_cust_gl = DATA(lv_cust_gl) ).
+
+
+                IF ls_ret IS INITIAL.
+
+                  DATA: lt_bkpf     TYPE TABLE OF bkpf,
+                        ls_bkpf     LIKE LINE OF lt_bkpf,
+                        lv_kokrs    TYPE kokrs,
+                        lt_ret      TYPE /kgo/fi_tt_messages,
+                        lt_bseg     TYPE TABLE OF bseg,
+                        ls_bseg     LIKE LINE OF lt_bseg,
+                        lt_bsec     TYPE TABLE OF bsec, "not used, required for call
+                        lt_bset     TYPE TABLE OF bset, "not used, required for call
+                        lt_bsez     TYPE TABLE OF bsez, "not used, required for call
+                        lt_pp       TYPE hrhcp00_posting_periods,
+                        ls_pp       TYPE hrhcp_s_posting_periods,
+                        ls_ret1     TYPE bapiret2,
+                        lv_docno    TYPE belnr_d,
+                        lv_posnr    TYPE buzei,
+                        lv_number   TYPE char15,
+                        ls_msg      TYPE bal_s_msg,
+                        lv_poper1   TYPE poper,
+                        lv_period   TYPE bapi0002_4-fiscal_period,
+                        lv_progn    TYPE char40, "Added for SCTASK1867012 (LTT changes) by MARINAHOTA on 28/05/2021
+                        lv_jobname  TYPE tbtcjob-jobname VALUE 'ZSUBMIT_INV', "Added for SCTASK1867012 (LTT changes) by MARINAHOTA on 28/05/2021
+                        lv_jobcount TYPE tbtcjob-jobcount, "Added for SCTASK1867012 (LTT changes) by MARINAHOTA on 28/05/2021
+                        lt_bkorm    TYPE STANDARD TABLE OF bkorm, "Added for SCTASK1867012 (LTT changes) by MARINAHOTA on 28/05/2021
+                        ls_bkorm    TYPE bkorm, "Added for SCTASK1867012 (LTT changes) by MARINAHOTA on 28/05/2021
+                        lv_budat    TYPE budat,
+                        lv_bldat    TYPE bldat,
+                        lv_period1  TYPE t001b-frpe1.
+                  "+Begin of addition for New company code 9921 changes on 15.09.2020
+                  IF im_head-company_code = '9901'.
+                    "+End of addition for New company code 9921 changes on 15.09.2020
+                    "Getting Reference document header
+                    "To get the RRF Number
+                    CALL FUNCTION 'NUMBER_GET_NEXT'
+                      EXPORTING
+                        nr_range_nr             = '01'
+                        object                  = '/KGO/BRF'
+                        quantity                = '1'
+                      IMPORTING
+                        number                  = lv_number
+                      EXCEPTIONS
+                        interval_not_found      = 1
+                        number_range_not_intern = 2
+                        object_not_found        = 3
+                        quantity_is_0           = 4
+                        quantity_is_not_1       = 5
+                        interval_overflow       = 6
+                        buffer_overflow         = 7
+                        OTHERS                  = 8.
+                    IF sy-subrc <> 0.
+* Implement suitable error handling here
+                    ENDIF.
+                    "+Begin of addition for New company code 9921 changes on 15.09.2020
+                  ENDIF.
+                  READ TABLE lt_item INTO DATA(ls_item) INDEX 1.
+                  IF sy-subrc  = 0.
+                    "+End of addition for New company code 9921 changes on 15.09.2020
+                    ls_bkpf-bukrs = im_head-company_code.
+*              ls_bkpf-gjahr = ls_head-gjahr.
+                    ls_bkpf-cpudt = sy-datum.
+                    ls_bkpf-cputm = sy-uzeit.
+                    ls_bkpf-usnam = sy-uname.
+                    ls_bkpf-wwert = sy-datum.
+*          ls_bkpf-glvor = 'RFBV'.
+                    "+Begin of Change for Incident INC01359865 on 21.12.2020
+                    IF im_head-company_code = '9901'.
+                      lv_kokrs = 'KPMG'.
+                    ELSEIF im_head-company_code = '9921'.
+                      lv_kokrs = '9920'.
+                    ENDIF.
+                    "+End of Change for Incident INC01359865 on 21.12.2020
+
+                    "Getting Posting Period
+*                    CALL FUNCTION 'HR_HCP_GET_POSTING_PERIODS'
+*                      EXPORTING
+*                        im_kokrs                     = lv_kokrs "'KPMG' "Changed for Incident INC01359865 on 21.12.2020
+*                        im_begda                     = sy-datum
+*                        im_endda                     = sy-datum
+*                      IMPORTING
+*                        ex_posting_periods           = lt_pp
+*                      EXCEPTIONS
+*                        get_period_error             = 1
+*                        get_first_day_last_day_error = 2
+*                        error_in_customer_exit       = 3
+*                        OTHERS                       = 4.
+*                    IF sy-subrc = 0.
+*                      READ TABLE lt_pp INTO ls_pp INDEX 1.
+*                      IF sy-subrc = 0.
+*                        ls_bkpf-monat = ls_pp-poper.  "Posting Period
+*                        ls_bkpf-gjahr = ls_head-gjahr = ls_pp-gjahr.
+*                      ENDIF.
+*                    ENDIF.
+*                    "+Begin of Change for Incident INC01359865 on 21.12.2020
+*
+*                    lv_period1 = ls_pp-poper.
+                    "+End of Change for Incident INC01359865 on 21.12.2020
+*                  ELSE.
+                    IF ls_bkpf-gjahr IS INITIAL.
+                      ls_bkpf-gjahr = ls_head-gjahr.
+                    ENDIF.
+*Begin of changes by ABHISHEKB on 19/04/2021 for posting period validation Commit Items.
+                    "Posting Date
+                    lv_budat = im_budat.
+                    IF lv_budat IS INITIAL.
+                      lv_budat = ls_item-posting_date.
+                    ENDIF.
+                    IF lv_budat IS INITIAL.
+                      lv_budat = sy-datum.
+                    ENDIF.
+                    IF lv_budat = '00000000'.
+                      lv_budat = sy-datum.
+                    ENDIF.
+                    IF ls_bkpf-gjahr IS INITIAL.
+                      ls_bkpf-gjahr = lv_budat(4).
+                      IF lv_budat+4(2) GT 9.
+                        ls_bkpf-gjahr = ls_bkpf-gjahr + 1.
+                      ENDIF.
+                    ENDIF.
+                    "Document Date
+                    lv_bldat = im_bldat.
+                    IF lv_bldat IS INITIAL.
+                      lv_bldat = ls_item-document_date.
+                    ENDIF.
+                    IF lv_bldat IS INITIAL.
+                      lv_bldat = sy-datum.
+                    ENDIF.
+                    IF lv_bldat = '00000000'.
+                      lv_bldat = sy-datum.
+                    ENDIF.
+                    CALL FUNCTION 'BAPI_COMPANYCODE_GET_PERIOD'
+                      EXPORTING
+                        companycodeid = ls_bkpf-bukrs
+                        posting_date  = lv_budat "im_budat
+                      IMPORTING
+                        fiscal_period = lv_period
+                      EXCEPTIONS
+                        OTHERS        = 1.
+                    IF sy-subrc = 0.
+                      ls_bkpf-monat = lv_period.
+                      lv_period1 = lv_period.
+                      CALL FUNCTION 'FI_PERIOD_CHECK'
+                        EXPORTING
+                          i_bukrs          = ls_bkpf-bukrs
+                          i_gjahr          = ls_bkpf-gjahr
+                          i_koart          = '+'
+                          i_monat          = lv_period1
+                        EXCEPTIONS
+                          error_period     = 1
+                          error_period_acc = 2
+                          invalid_input    = 3
+                          OTHERS           = 4.
+                    ENDIF.
+                    IF sy-subrc <> 0.
+                      ex_ret-type = 'E'.
+                      ex_ret-message = TEXT-007.
+                      RETURN.
+                    ENDIF.
+*End of changes by ABHISHEKB on 19/04/2021 for posting period validation Commit Items.
+                    IF ls_item-fi_doc_no IS INITIAL. "+Added for incident INC01232619 on 02.09.2020
+                      "Select Corresponding Address
+                      "Commented by ABHISHEKB
+*                      SELECT coraddr UP TO 1 ROWS FROM /kgo/fi_corr_adr INTO @DATA(lv_coradr)
+*                        WHERE bukrs = @im_head-company_code
+*                        AND   land2 = @ls_item-requesting_mf.
+*                      ENDSELECT.
+*                      IF sy-subrc <> 0.
+*                        SELECT coraddr UP TO 1 ROWS FROM /kgo/fi_corr_adr INTO lv_coradr
+*                       WHERE bukrs = im_head-company_code
+*                       AND   land1 = ls_item-requesting_mf.
+*                        ENDSELECT.
+*                        IF sy-subrc = 0.
+*                          ls_bkpf-zzcoraddr = lv_coradr.
+*                        ENDIF.
+*                      ELSE.
+*                        ls_bkpf-zzcoraddr = lv_coradr.
+*                      ENDIF.
+
+**Begin of changes by ABHISHEKB on 26/10/2021
+                 IF IM_HEAD-COMPANY_CODE = '9921'.
+                  SELECT SINGLE lstml FROM T007A INTO @DATA(lv_lstml)
+                                        WHERE mwskz = @im_vat_sap_code
+                                        AND KALSM = 'ZTAXGB'.
+                  ELSEIF IM_HEAD-COMPANY_CODE = '9901'.
+                  SELECT SINGLE lstml FROM T007A INTO @lv_lstml
+                                        WHERE mwskz = @im_vat_sap_code
+                                        AND KALSM = 'TAXNL'.
+                  ENDIF.
+                 IF SY-SUBRC IS INITIAL.
+                  IF lv_lstml = 'NL' OR lv_lstml = 'CA'.
+                          ls_BKPF-zzcoraddr = '01'.
+                  ELSEIF lv_lstml = 'GB'.
+                     ls_BKPF-zzcoraddr = '03'.
+                  ENDIF.
+                 ENDIF.
+
+                  SELECT SINGLE land1 FROM kna1 INTO @DATA(lv_land2)
+                                        WHERE kunnr = @im_sap_code.
+                  IF SY-SUBRC IS INITIAL.
+                  IF lv_land2 = 'RS'.    "'GB'.
+                     ls_BKPF-zzcoraddr = '04'.
+                   ELSEIF lv_land2 = 'AR'."'SR'.
+                      ls_BKPF-zzcoraddr = '01'.
+                  ENDIF.
+                  ENDIF.
+**End of changes by ABHISHEKB on 26/10/2021
+
+
+                      IF ls_item-kpmgi_vat_id IS NOT INITIAL.
+                        "Selecting company VAT code
+                        ls_bkpf-zzvat =  ls_item-kpmgi_vat_id.
+                        SELECT land1 UP TO 1 ROWS FROM t001n INTO @DATA(lv_land1)
+                          WHERE bukrs = @im_head-company_code
+                          AND   stceg = @ls_item-kpmgi_vat_id.
+                        ENDSELECT.
+                        IF sy-subrc = 0.
+                          CASE lv_land1.
+                            WHEN 'GB'.
+                              IF ls_item-nature_of_service = 'Adhoc/One-Off'.
+*
+                                ls_bkpf-vatdate = ls_item-last_date_srv.
+                                ls_bkpf-wwert = ls_bkpf-vatdate.   " Changes by ABHISHEKB for Translation Date ON 19/04/2021 Commit Items
+                              ELSEIF ls_item-nature_of_service = 'Continuous'.
+
+                                ls_bkpf-vatdate = lv_budat."im_budat.
+                                ls_bkpf-wwert = ls_bkpf-vatdate.   " Changes by ABHISHEKB for Translation Date on 19/04/2021 Commit Items
+                              ENDIF.
+                            WHEN OTHERS.
+                              ls_bkpf-vatdate = lv_budat."im_budat.
+                              ls_bkpf-wwert = ls_bkpf-vatdate.  " Changes by ABHISHEKB for Translation Date on 19/04/2021 Commit Items
+                          ENDCASE.
+                        ENDIF.
+                      ELSE.
+                        SELECT SINGLE stceg INTO ls_bkpf-zzvat FROM t001 WHERE bukrs = im_head-company_code.
+                        IF ls_item-taxpoint_date IS NOT INITIAL.
+                          ls_bkpf-vatdate = ls_item-taxpoint_date.
+                          ls_bkpf-wwert = ls_bkpf-vatdate.   " Changes by ABHISHEKB for Translation Date on 19/04/2021 Commit Items
+                        ELSE.
+                          ls_bkpf-vatdate = sy-datum.
+                          ls_bkpf-wwert = ls_bkpf-vatdate. " Changes by ABHISHEKB for Translation Date on 19/04/2021 Commit Items
+                        ENDIF.
+                      ENDIF.
+                      "+Begin of addition for SCTASK1885527 on 04.02.2021
+*                  IF ls_item-document_date IS INITIAL OR ls_item-document_date = '00000000'.
+*                  ls_item-document_date = sy-datum. "63286
+*                  ENDIF.
+*                  IF ls_item-posting_date IS INITIAL OR ls_item-posting_date = '00000000'.
+*                  ls_item-posting_date = sy-datum. "63286
+*                  ENDIF.
+                      "+End of addition for SCTASK1885527 on 04.02.2021
+                      "+Begin of addition for New company code 9921 changes on 15.09.2020
+                      IF im_head-company_code = '9901'.
+                        "+End of addition for New company code 9921 changes on 15.09.2020
+                        ls_bkpf-blart = 'RI'.
+                        "+Begin of addition for New company code 9921 changes on 15.09.2020
+                      ELSE.
+                        ls_bkpf-blart = ls_item-document_type.
+                      ENDIF.
+                      "+End of addition for New company code 9921 changes on 15.09.2020
+                      ls_bkpf-bldat = lv_bldat."im_bldat."ls_item-document_date.
+                      ls_bkpf-budat = lv_budat."im_budat."ls_item-posting_date.
+                      "+Begin of addition for New company code 9921 changes on 15.09.2020
+                      IF im_head-company_code = '9901'.
+                        "+End of addition for New company code 9921 changes on 15.09.2020
+                        ls_bkpf-xblnr = lv_number.
+                        "+Begin of addition for New company code 9921 changes on 15.09.2020
+                      ENDIF.
+                      "+End of addition for New company code 9921 changes on 15.09.2020
+                      "+Begin of addition for New company code 9921 changes on 15.09.2020
+                      IF im_head-company_code = '9901'.
+                        "+End of addition for New company code 9921 changes on 15.09.2020
+                        ls_bkpf-bktxt = im_mf && '_' && im_pgrp.
+                        "+Begin of addition for New company code 9921 changes on 15.09.2020
+                      ELSE."For 9921 company code
+                        ls_bkpf-bktxt = ls_item-brf_no && '_' && ls_item-line_item_no.
+                      ENDIF.
+                      "+End of addition for New company code 9921 changes on 15.09.2020
+                      ls_bkpf-curt2 = '30'.   "Group Currency
+                      ls_bkpf-kuty2 = 'M'.   "Exchange Rate
+                      ls_bkpf-hwaer = ls_bkpf-hwae2 = ls_bkpf-waers = ls_item-curr1.
+                      "+Begin of addition for New company code 9921 changes on 15.09.2020
+                      IF im_head-company_code = '9901'.
+                        "+End of addition for New company code 9921 changes on 15.09.2020
+                        ls_bkpf-zzbrf = ls_bkpf-xref1_hd = ls_item-brf_no.
+                        "+Begin of addition for New company code 9921 changes on 15.09.2020
+                      ELSE."For 9921 company code
+                        ls_bkpf-zzbrf = ls_bkpf-xref1_hd = im_mf && '_' && im_pgrp.
+                      ENDIF.
+                      "+End of addition for New company code 9921 changes on 15.09.2020
+                      ls_bkpf-zzrrf = ls_bkpf-xref2_hd = im_head-rrf_no.
+                      ls_bkpf-zzcontact = ls_item-atten_brf.
+                      ls_bkpf-zzemail = ls_item-atten_brf_email.
+                      IF ls_item-vat_sap_code IS NOT INITIAL.
+                        ls_bkpf-xmwst = abap_true.
+                        ls_bkpf-xsnet = abap_true.
+                      ENDIF.
+                      APPEND ls_bkpf TO lt_bkpf.
+
+                      "Adding Customer Line Item
+                      lv_posnr = lv_posnr + 1.
+                      ls_bseg-buzei = lv_posnr.
+                      ls_bseg-bukrs = ls_bkpf-bukrs.
+                      ls_bseg-gjahr = ls_bkpf-gjahr.
+                      ls_bseg-augdt = sy-datum.
+                      ls_bseg-koart = 'D'.
+*            ls_bseg-vorgn = 'RFBU'.
+                      ls_bseg-bschl = '01'.
+                      ls_bseg-shkzg = 'S'.
+                      ls_bseg-kunnr = ls_item-sap_code_mf.
+                      ls_bseg-hkont = lv_cust_gl.
+                      ls_bseg-kostl = ls_item-cc_code2.
+                      ls_bseg-prctr = ls_item-profit_center_debit.
+                      IF ls_head-rrf_no IS NOT INITIAL.
+                        CONCATENATE ls_head-brf_no '>' ls_head-rrf_no INTO ls_bseg-sgtxt.
+                      ELSE.
+                        ls_bseg-sgtxt = ls_item-brf_no.
+                      ENDIF.
+                      "IF Document has tax code
+                      IF ls_item-vat_sap_code IS NOT INITIAL.
+                        lv_wrbtr = ls_item-recharge_amount_credit.
+                        "IF Document has with holding tax
+                        IF ls_item-line_item_total IS NOT INITIAL AND ls_item-wht_code IS NOT INITIAL.
+                          IF ls_item-wht_code <> 'NA'.
+                            lv_wrbtr = ls_item-recharge_amount_credit + ls_item-line_item_total.
+                          ENDIF.
+                        ENDIF.
+                        lv_taxcode = ls_item-vat_sap_code.
+                        CALL FUNCTION 'CALCULATE_TAX_FROM_NET_AMOUNT'
+                          EXPORTING
+                            i_bukrs           = im_head-company_code
+                            i_mwskz           = lv_taxcode
+                            i_waers           = ls_item-curr1
+                            i_wrbtr           = lv_wrbtr
+                          IMPORTING
+                            e_fwste           = lv_tax1
+                            e_fwast           = lv_tax2
+                          TABLES
+                            t_mwdat           = lt_tax
+                          EXCEPTIONS
+                            bukrs_not_found   = 1
+                            country_not_found = 2
+                            mwskz_not_defined = 3
+                            mwskz_not_valid   = 4
+                            ktosl_not_found   = 5
+                            kalsm_not_found   = 6
+                            parameter_error   = 7
+                            knumh_not_found   = 8
+                            kschl_not_found   = 9
+                            unknown_error     = 10
+                            account_not_found = 11
+                            txjcd_not_valid   = 12
+                            OTHERS            = 13.
+                        IF sy-subrc = 0.
+                          IF lv_tax2 IS NOT INITIAL.
+                            ls_item-recharge_amount_debit = ls_item-recharge_amount_debit + lv_tax2 + ls_item-line_item_total.
+                          ELSE.
+                            ls_item-recharge_amount_debit = ls_item-recharge_amount_debit + lv_tax1 + ls_item-line_item_total.
+                          ENDIF.
+                        ENDIF.
+                      ENDIF.
+
+                      ls_bseg-dmbe2 = ls_bseg-dmbtr = ls_bseg-wrbtr = ls_item-recharge_amount_debit.
+                      ls_bseg-mwskz = ls_item-vat_sap_code.
+                      ls_bseg-zterm = 'Z000'.
+                      ls_bseg-zfbdt = sy-datum.
+                      ls_bseg-xumsw = abap_true.
+                      APPEND ls_bseg TO lt_bseg.
+                      CLEAR ls_bseg.
+
+                      "Adding G/L Line
+                      lv_posnr = lv_posnr + 1.
+                      ls_bseg-buzei = lv_posnr.
+                      ls_bseg-bukrs = ls_bkpf-bukrs.
+                      ls_bseg-gjahr = ls_bkpf-gjahr.
+                      ls_bseg-augdt = sy-datum.
+                      ls_bseg-koart = 'S'.
+*            ls_bseg-vorgn = 'RFBU'.
+                      ls_bseg-bschl = 50.
+                      ls_bseg-shkzg = 'H'.
+*            ls_bseg-saknr = ls_item-credit_gl.
+                      ls_bseg-hkont = ls_item-credit_gl.
+                      ls_bseg-kostl = ls_item-cc_code1.
+                      ls_bseg-prctr = ls_item-profit_center.
+                      IF ls_head-rrf_no IS NOT INITIAL.
+                        CONCATENATE ls_head-brf_no '>' ls_head-rrf_no INTO ls_bseg-sgtxt.
+                      ELSE.
+                        ls_bseg-sgtxt = ls_item-brf_no.
+                      ENDIF.
+                      ls_bseg-dmbe2 = ls_bseg-dmbtr = ls_bseg-wrbtr = ls_item-recharge_amount_credit.
+                      ls_bseg-xref1 = ls_item-urn.
+                      ls_bseg-zzlocation = ls_item-location_of_the_services_req.
+
+                      IF ls_item-urn IS NOT INITIAL.
+                        CONCATENATE ls_item-urn '>' ls_item-adl_description  INTO ls_bseg-zzline_desc.
+                      ELSE.
+                        ls_bseg-zzline_desc = ls_item-adl_description. "Short Description
+                      ENDIF.
+                      ls_bseg-mwskz = ls_item-vat_sap_code. "+Added for defect 63313 on 14.05.2020
+                      APPEND ls_bseg TO lt_bseg.
+                      CLEAR ls_bseg.
+
+
+                      IF ls_item-line_item_total IS NOT INITIAL AND ls_item-wht_code IS NOT INITIAL.
+                        IF ls_item-wht_code <> 'NA'.
+                          lv_posnr = lv_posnr + 1.
+                          ls_bseg-buzei = lv_posnr.
+                          ls_bseg-bukrs = ls_bkpf-bukrs.
+                          ls_bseg-gjahr = ls_bkpf-gjahr.
+                          ls_bseg-augdt = sy-datum.
+                          ls_bseg-koart = 'S'.
+                          ls_bseg-bschl = 50.
+                          ls_bseg-shkzg = 'H'.
+                          ls_bseg-mwskz = ls_item-vat_sap_code.
+                          ls_bseg-hkont = ls_item-debit_gl.
+                          ls_bseg-kostl = ls_item-cc_code2.
+                          ls_bseg-prctr = ls_item-profit_center_debit.
+                          ls_bseg-dmbe2 = ls_bseg-dmbtr = ls_bseg-wrbtr = ls_item-line_item_total.
+                          APPEND ls_bseg TO lt_bseg.
+                        ENDIF.
+                      ENDIF.
+                      CLEAR :  ls_bseg,lv_posnr,lv_number.
+
+                      CALL FUNCTION 'PRELIMINARY_POSTING_FB01'
+                        EXPORTING
+*                         TEXT_UPDATE   = ' '
+*                         TEXT_ITEM_UPDATE       = ' '
+                          i_xcmpl       = abap_true
+                          i_tcode       = 'FB01'
+*                         I_TCODE_INT   =
+                        TABLES
+                          t_bkpf        = lt_bkpf
+                          t_bseg        = lt_bseg
+                          t_bsec        = lt_bsec
+                          t_bset        = lt_bset
+                          t_bsez        = lt_bsez
+                        EXCEPTIONS
+                          error_message = 1.
+
+                      IF sy-subrc = 0.
+
+                        GET PARAMETER ID 'BLP' FIELD lv_docno.
+
+*Start of Change for SCTASK1867012 (LTT changes) by MARINAHOTA on 28/05/2021
+
+                        ls_bkorm-event = 'SAPPL'.
+                        ls_bkorm-bukrs = im_head-company_code.
+                        ls_bkorm-belnr = lv_docno.
+                        ls_bkorm-gjahr = ls_head-gjahr.
+                        APPEND ls_bkorm TO lt_bkorm.
+
+                        IF lt_bkorm IS NOT INITIAL.
+                          MODIFY bkorm FROM TABLE lt_bkorm.
+                          IF sy-subrc = 0.
+                            COMMIT WORK.
+                          ENDIF.
+                        ENDIF.
+
+                        SELECT SINGLE progn FROM  t048b INTO lv_progn
+                               WHERE event = 'SAPPL'
+                               AND   bukrs = im_head-company_code.
+                        CALL FUNCTION 'JOB_OPEN'
+                          EXPORTING
+                            jobname          = lv_jobname
+                          IMPORTING
+                            jobcount         = lv_jobcount
+                          EXCEPTIONS
+                            cant_create_job  = 1
+                            invalid_job_data = 2
+                            jobname_missing  = 3
+                            OTHERS           = 4.
+                        IF sy-subrc <> 0.
+* Implement suitable error handling here
+                        ENDIF.
+
+                        IF lv_jobcount IS NOT INITIAL AND lv_progn IS NOT INITIAL.
+
+                          SUBMIT (lv_progn) VIA JOB lv_jobname NUMBER lv_jobcount AND RETURN    "Program Name : RFKORD30_PDF
+                            WITH sortvk     = 'B1'
+                            WITH dspras     = '3'
+                            WITH rbukrs     =  im_head-company_code
+                            WITH revent     =  'SAPPL'
+                            WITH rbelnr     =  lv_docno
+                            WITH rgjahr     =  ls_head-gjahr
+                            WITH rxbkor     =  'X'
+                            WITH rsimul     =  'X'
+                            WITH rxtsub     =  'X'
+                            WITH tddest     =  'LP01'.
+
+
+                          CALL FUNCTION 'JOB_CLOSE'
+                            EXPORTING
+                              jobcount             = lv_jobcount
+                              jobname              = lv_jobname
+                              strtimmed            = 'X'
+                            EXCEPTIONS
+                              cant_start_immediate = 1
+                              invalid_startdate    = 2
+                              jobname_missing      = 3
+                              job_close_failed     = 4
+                              job_nosteps          = 5
+                              job_notex            = 6
+                              lock_failed          = 7
+                              invalid_target       = 8
+                              invalid_time_zone    = 9
+                              OTHERS               = 10.
+                          IF sy-subrc <> 0.
+* Implement suitable error handling here
+                          ENDIF.
+                        ENDIF.
+
+*End of Change for SCTASK1867012 (LTT changes) by MARINAHOTA on 28/05/2021
+
+
+                        IF lv_docno IS NOT INITIAL.
+                          ex_doc_no = lv_docno.
+                          ex_refdoc = ls_bkpf-xblnr.
+                          ex_hdtxt = ls_bkpf-bktxt.
+                          DATA(lv_mess) = lv_docno.
+                          ex_ret-type = 'S'.
+                          CONCATENATE 'Document-' lv_mess  'Successfully Parked for BRF No:' ls_item-brf_no 'and Member Firm:'
+                          ls_item-requesting_mf 'PGroup:' ls_item-process_grp INTO ex_ret-message SEPARATED BY space.
+                          lv_message = ex_ret-message.
+                          CALL FUNCTION '/KGO/AR_FI_ADD_SLG_LOG'
+                            EXPORTING
+                              header_msg = lv_message
+                              subobject  = 'PARK_DOC_SUCCESS'
+                              msg_type   = ex_ret-type.
+
+                          "Populating Long Text for Parked Documents.
+                          lv_process = ls_item-process_grp.
+                          TRANSLATE lv_process TO UPPER CASE.
+                          IF ls_item-transaction_type IS INITIAL.
+                            CONCATENATE ls_item-brf_no '_' ls_item-requesting_mf '_' lv_process '_' ls_item-member_firm INTO lv_long_name.
+                          ELSE.
+                            CONCATENATE ls_item-brf_no '_' ls_item-requesting_mf '_' lv_process '_'
+                            ls_item-transaction_type '_' ls_item-member_firm INTO lv_long_name.
+                          ENDIF.
+
+                          CALL FUNCTION 'READ_TEXT'
+                            EXPORTING
+                              client                  = sy-mandt
+                              id                      = 'ST'
+                              language                = 'E'
+                              name                    = lv_long_name
+                              object                  = 'TEXT'
+                            TABLES
+                              lines                   = lt_lines
+                            EXCEPTIONS
+                              id                      = 1
+                              language                = 2
+                              name                    = 3
+                              not_found               = 4
+                              object                  = 5
+                              reference_check         = 6
+                              wrong_access_to_archive = 7
+                              OTHERS                  = 8.
+                          IF sy-subrc <> 0.
+* Implement suitable error handling here
+                          ENDIF.
+                          IF lt_lines IS INITIAL AND
+                          NOT ls_item-details_description_of_servic IS INITIAL.
+
+                            DATA(lv_len) = strlen( ls_item-details_description_of_servic ).
+                            IF lv_len LE 132.
+                              ls_lines-tdformat = '*'.
+                              ls_lines-tdline  = ls_item-details_description_of_servic .
+                              APPEND ls_lines TO lt_lines.
+                              CLEAR ls_lines.
+                            ELSE.
+                              DATA(lv_div) = lv_len DIV 132. "lv_len / 132. "/ Changed to DIV to fixed error during parking on 27.08.2020
+                              DATA(lv_mod) = lv_len MOD 132.
+                              IF lv_mod GT 0.
+                                lv_div = lv_div + 1.
+                              ENDIF.
+                              DO lv_div TIMES.
+                                DATA(lv_rem) = lv_len - lv_off.
+                                IF lv_off GT lv_rem.
+                                  lv_to = lv_rem.
+                                ENDIF.
+                                ls_lines-tdformat = '*'.
+                                ls_lines-tdline  = ls_item-details_description_of_servic+lv_off(lv_to).
+                                APPEND ls_lines TO lt_lines.
+                                CLEAR ls_lines.
+                                lv_off = lv_off + 132.
+                              ENDDO.
+                            ENDIF.
+                          ENDIF.
+
+                          IF ls_item-addl_desc_above IS NOT INITIAL.
+                            DATA(lv_len1) = strlen( ls_item-addl_desc_above ).
+                            IF lv_len1 LE 132.
+                              ls_lines-tdformat = '/'.
+                              ls_lines-tdline  = ls_item-addl_desc_above .
+                              APPEND ls_lines TO lt_lines.
+                              CLEAR ls_lines.
+                            ELSE.
+                              lv_rem = lv_len1 - 132.
+                              ls_lines-tdformat = '/'.
+                              ls_lines-tdline  = ls_item-addl_desc_above(132).
+                              APPEND ls_lines TO lt_lines.
+                              CLEAR ls_lines.
+
+                              ls_lines-tdformat = '*'.
+                              ls_lines-tdline  = ls_item-addl_desc_above+132(lv_rem).
+                              APPEND ls_lines TO lt_lines.
+                              CLEAR ls_lines.
+                            ENDIF.
+                          ENDIF.
+
+                          IF ls_item-mf_cost_center IS NOT INITIAL.
+                            CONCATENATE 'Cost Center/ Engagement / Project Code' '-' ls_item-mf_cost_center INTO ls_lines-tdline SEPARATED BY space.
+                            ls_lines-tdformat = '/'.
+*                    ls_lines-tdline  = ls_item-mf_cost_center.
+                            APPEND ls_lines TO lt_lines.
+                            CLEAR ls_lines.
+                          ENDIF.
+                          CONCATENATE  im_head-company_code   "For Line Item 1.
+                                       lv_docno
+                                       ls_head-gjahr
+                                       '001' INTO lv_name.
+                          IF lt_lines[] IS NOT INITIAL.
+                            "long Text udated line item level
+                            CALL FUNCTION 'CREATE_TEXT'
+                              EXPORTING
+                                fid         = lc_id
+                                flanguage   = sy-langu
+                                fname       = lv_name
+                                fobject     = lc_obj
+                                save_direct = 'X'
+                              TABLES
+                                flines      = lt_lines
+                              EXCEPTIONS
+                                no_init     = 1
+                                no_save     = 2
+                                OTHERS      = 3.
+
+                            IF sy-subrc = 0.
+                              CONCATENATE  im_head-company_code   "For Line Item 2.
+                                         lv_docno
+                                         ls_head-gjahr
+                                         '002' INTO lv_name.
+                              "long Text udated line item level
+                              CALL FUNCTION 'CREATE_TEXT'
+                                EXPORTING
+                                  fid         = lc_id
+                                  flanguage   = sy-langu
+                                  fname       = lv_name
+                                  fobject     = lc_obj
+                                  save_direct = 'X'
+                                TABLES
+                                  flines      = lt_lines
+                                EXCEPTIONS
+                                  no_init     = 1
+                                  no_save     = 2
+                                  OTHERS      = 3.
+                            ENDIF.
+                          ENDIF."Long text ended
+                        ENDIF.
+                      ELSE.
+                        ex_ret-id         = sy-msgid.
+                        ex_ret-type       = sy-msgty.
+                        ex_ret-number     = sy-msgno.
+*              lv_message        = ex_ret-message.
+                        CONCATENATE 'Error in parking document for BRF No:' ls_item-brf_no 'and Member Firm:' ls_item-requesting_mf
+                        'PGroup:' ls_item-process_grp INTO ex_ret-message SEPARATED BY space.
+                        lv_message = ex_ret-message.
+                        CALL FUNCTION 'BALW_BAPIRETURN_GET2'
+                          EXPORTING
+                            type   = sy-msgty
+                            cl     = sy-msgid
+                            number = sy-msgno
+                          IMPORTING
+                            return = ls_ret1.
+                        IF ls_ret1 IS NOT INITIAL.
+                          APPEND ls_ret1 TO lt_ret.
+                          MOVE-CORRESPONDING ls_ret1 TO ex_ret.
+                        ENDIF.
+
+                        CALL FUNCTION '/KGO/AR_FI_ADD_SLG_LOG'
+                          EXPORTING
+                            header_msg = lv_message
+                            messages   = lt_ret
+                            subobject  = 'PARK_DOC_FAIL'
+                            msg_type   = ex_ret-type.
+
+                      ENDIF.
+                      CLEAR ls_bkpf.
+                      "+Begin of addition for INC01232619 on 02.09.2020
+                    ELSE."Document already parked
+                      CONCATENATE 'Document already parked for BRF No:' ls_item-brf_no 'and Member Firm:' ls_item-requesting_mf
+                        'PGroup:' ls_item-process_grp INTO ex_ret-message SEPARATED BY space.
+                      ex_ret-type = 'E'.
+                    ENDIF.
+                    "+End of addition for INC01232619 on 02.09.2020
+                  ENDIF.
+                ELSE.
+                  ex_ret = ls_ret.
+                ENDIF.
+              ENDIF."+For duplicate check on 29.04.2021
+            ELSE.
+              ex_ret-type = 'E'.
+              ex_ret-message = 'No data to park for BRF Number -' && im_head-brf_no.
+            ENDIF.
+          ELSE.
+            ex_ret-type = 'E'.
+            ex_ret-message = 'No data to park for BRF Number -' && im_head-brf_no.
+          ENDIF.
+        ENDIF.
+        "+ Begin of addition for  INC01232619 on 02.09.2020
+      CATCH cx_root.
+        IF lv_docno IS NOT INITIAL.
+          CONCATENATE 'Document-' ex_doc_no  'Successfully Parked for BRF No:' ls_item-brf_no 'and Member Firm:'
+                    ls_item-requesting_mf 'PGroup:' ls_item-process_grp 'bur error in long text creation'
+                    INTO ex_ret-message SEPARATED BY space.
+        ENDIF.
+    ENDTRY.
+    "+End of addition for  INC01232619 on 02.09.2020
+  ENDMETHOD.
